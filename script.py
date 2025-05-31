@@ -50,6 +50,41 @@ def get_websocket_connection(symbol: str):
         print(f"[{get_current_time()}] 🔌 Error de conexión: {str(e)}")
         return None
 
+def is_valid_symbol(symbol: str) -> bool:
+    """Verifica si el símbolo existe en Bybit."""
+    url = "https://api.bybit.com/v5/market/instruments-info?category=linear"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Verificar si el símbolo existe en la lista de instrumentos
+        for item in data["result"]["list"]:
+            if item["symbol"] == symbol:
+                return True
+        return False
+    except Exception as e:
+        print(f"[{get_current_time()}] ❌ Error al verificar símbolo: {str(e)}")
+        return False
+    
+def get_current_price(symbol: str) -> float:
+    """Obtiene el precio actual de un símbolo desde WebSocket una sola vez."""
+    ws = get_websocket_connection(symbol)
+    if not ws:
+        print(f"[{get_current_time()}] ❌ No se pudo conectar al WebSocket.")
+        return None
+
+    while True:
+        try:
+            data = json.loads(ws.recv())
+            if "topic" in data and "data" in data and data["topic"] == f"tickers.{symbol}":
+                ws.close()
+                return float(data["data"]["lastPrice"])
+        except Exception as e:
+            print(f"[{get_current_time()}] ❌ Error recibiendo datos: {str(e)}")
+            ws.close()
+            return None
+        
 def monitor_price(symbol: str, target_price: float, updown: str ):
     """Monitorea el precio hasta alcanzar el objetivo."""
     alert_triggered = False
@@ -62,7 +97,8 @@ def monitor_price(symbol: str, target_price: float, updown: str ):
                 continue
 
             clear_screen()
-            print(f"[{get_current_time()}] 🔎 Monitoreando {symbol}...")
+            print(f"[{get_current_time()}] 🔎 Alerta Activada! {symbol}...")
+            print(f"[{get_current_time()}] Objetivo {'ARRIBA ⬆️ ' if updown == 'U' else 'ABAJO ⬇️ '} del precio actual.")
             print(f"[{get_current_time()}] Objetivo a llevar: ${target_price:,.6f}")
 
             while True:
@@ -89,9 +125,10 @@ def monitor_price(symbol: str, target_price: float, updown: str ):
                     else:
                         if current_price > target_price and not alert_triggered:
                             message = (
-                                f"🚨 **ALERTA DE PRECIO - {get_current_time()}**\n"
-                                f"*{symbol}* alcanzó *${target_price:,.6f}*\n"
-                                f"Precio actual: *${current_price:,.6f}*"
+                                f"🚨 *Alerta de Precio Activada*\n"
+                                #f"🕒 *Hora:* {get_current_time()}\n"
+                                f"📈 *Símbolo:* `{symbol}`\n"
+                                f"🎯 *Precio Objetivo:* ${target_price:,.6f}\n"
                             )
 
                             if send_telegram_alert(message) == False:
@@ -119,8 +156,18 @@ def main_menu():
     print("=== BYBIT PRICE ALERT (v4.0) ===")
     
     # Configurar símbolo inicial
-    symbol = input("Ingrese el símbolo a monitorear (ej: BTC): ").strip().upper()
-    symbol = symbol + 'USDT'
+    while True:
+        symbol = input("Ingrese el símbolo a monitorear (ej: BTC): ").strip().upper()
+        symbol = symbol + 'USDT'
+        
+        # Validar el símbolo
+        if not is_valid_symbol(symbol):
+            print(f"\n[{get_current_time()}] ❌ El símbolo {symbol} no existe en Bybit. Intente nuevamente.")
+            time.sleep(2)
+            clear_screen()
+            continue
+        break
+     
     while True:
         try:
             # Solicitar nuevo target
@@ -133,16 +180,23 @@ def main_menu():
                 print("\n👋 ¡Hasta luego!")
                 break
 
-            updown = input("Ingrese su el objetivo esta por encima o por debajo del precio actual (u:up d:down):").strip().upper()
+            #updown = input("Ingrese su el objetivo esta por encima o por debajo del precio actual (u:up d:down):").strip().upper()
             
-            if updown not in ('U', 'D'):
-                print("\n👋 ¡Hasta luego!")
-                break
+            #if updown not in ('U', 'D'):
+            #    print("\n👋 ¡Hasta luego!")
+            #    break
+
+            current_price = get_current_price(symbol)
+            if current_price is None:
+                print("\n⚠️ No se pudo obtener el precio actual.")
+                continue
+
+            updown = 'U' if target > current_price else 'D'
 
             # Iniciar monitoreo
             print(f"\n[{get_current_time()}] ⚡ Iniciando monitoreo...")
             monitor_price(symbol, target, updown)
-            
+
         except ValueError:
             print("\n⚠️ Error: Debes ingresar un número válido")
             time.sleep(2)
